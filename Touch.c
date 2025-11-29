@@ -1,10 +1,10 @@
 /*********************************************************************
-    FileName:     	I2C.c
+    FileName:     	Touch.c
     Dependencies:	See #includes
     Processor:		PIC32MZ
-    Hardware:		MainBrain32 rev 0.20
-    Complier:  	    XC32 4.40, 4.45
-    Author:         Larry Knight 2024
+    Hardware:		MainBrain MZ
+    Complier:		XC32 4.40, 4.45
+    Author:		Larry Knight 2024
 
     Software License Agreement:
         This software is licensed under the Apache License Agreement
@@ -70,7 +70,7 @@ uint8_t read_buf[16];
 int wait_time = 10000;
 uint16_t scn_pos_x;
 
-uint16_t scn_Y;
+uint16_t scn_pos_y;
 
 uint8_t MenuLevel = 0;
 uint8_t ButtonNum = 0;
@@ -114,23 +114,30 @@ void I2C_init()
     I2C2BRG = 0x0069; 
     
     //I2C-2 Interrupt
+    IFS0bits.IC2IF = 0; 
     IEC0bits.IC2IE = 1;
-    IFS0bits.IC2IF = 0;
     
     //Master
-    IPC37bits.I2C2MIP = 7;
-    IEC4bits.I2C2MIE = 0;
+    IPC37bits.I2C2MIP = 4;
+    IPC37bits.I2C2MIS = 3;
+    
     IFS4bits.I2C2MIF = 0;
+    IEC4bits.I2C2MIE = 0;
     
     //Slave
-    IPC37bits.I2C2SIP = 7;
+    IPC37bits.I2C2SIP = 4;
+    IPC37bits.I2C2SIS = 2;
+    
     IEC4bits.I2C2SIE = 0;
     IFS4bits.I2C2SIF = 0;
             
     //INT0 
-    IPC0bits.INT0IP = 7;
-    IEC0bits.INT0IE = 1;
+    IPC0bits.INT0IP = 4;
+    IPC0bits.INT0IS = 1;
+    
     IFS0bits.INT0IF = 0;
+    IEC0bits.INT0IE = 1;
+    
     
     //SDA Hold Time 0 = 100nS, 1 = 300nS
     I2C2CONbits.SDAHT = 0;
@@ -151,6 +158,14 @@ void I2C_init()
     PORTBbits.RB13 = 1;
     for(i=0;i<100000;i++);
     
+//    //If there is no touch panel is detected by the time Timer 5 rolls over
+//    //the wait for the device completes and returns to the calling function
+//    //Start Timer 5
+//    T5CONbits.TCKPS = 0;
+//    IFS0bits.T5IF = 0;
+//    T5CONbits.ON = 0;
+//    IFS0bits.T5IF
+//    
     //Check for device present    
     if(!Device_Present())
     {
@@ -175,79 +190,27 @@ void I2C_init()
 }
 
 //INT0 Interrupt handler
-void __attribute__((vector(_EXTERNAL_0_VECTOR), interrupt(ipl7srs), nomips16)) INT0_Handler()
+void __attribute__((vector(_EXTERNAL_0_VECTOR), interrupt(ipl4srs), nomips16)) INT0_Handler()
 {
     FT5436_Read(16);
     
-    //Process the touch position
-    if(read_buf[2] > 0)
+    //if there is a touch but only 1 touch point
+    if(read_buf[2] == 1)
     {
         scn_pos_x = read_buf[5];
         scn_pos_x = scn_pos_x << 8;
         scn_pos_x = scn_pos_x + read_buf[6];
 
-        scn_Y = read_buf[3] - 128;
-        scn_Y = scn_Y << 8;
-        scn_Y = scn_Y + read_buf[4];
+        scn_pos_y = read_buf[3] - 128;
+        scn_pos_y = scn_pos_y << 8;
+        scn_pos_y = scn_pos_y + read_buf[4];
 
-        if(scn_Y > 320)
+        if(scn_pos_y > 320)
         {
-            scn_Y = 320;
+            scn_pos_y = 320;
         }
 
-        scn_Y = 320 - scn_Y;
-        
-//            hchar = 10;
-//            vchar = 200;
-//
-//            Binary2ASCIIBCD(scn_pos_x);
-//            WriteChar(hchar, vchar, d2, black, white);
-//            WriteChar(hchar, vchar, d1, black, white);
-//            WriteChar(hchar, vchar, d0, black, white);
-//
-//            WriteChar(hchar, vchar, ',', black, white);
-//
-//            Binary2ASCIIBCD(scn_Y);
-//            WriteChar(hchar, vchar, d2, black, white);
-//            WriteChar(hchar, vchar, d1, black, white);
-//            WriteChar(hchar, vchar, d0, black, white);
-
-        //Button1 pressed 20, 50, 150, 50
-        if((scn_pos_x > 30 && scn_pos_x < 200) && (scn_Y > 50 && scn_Y < 100))
-        {
-            if(ButtonNum == 0)
-            {
-                ButtonNum = 1;
-            }
-        }
-        
-        //Button2 pressed 20, 125, 150, 50
-        if((scn_pos_x > 30 && scn_pos_x < 200) && (scn_Y > 125 && scn_Y < 175))
-        {
-            if(ButtonNum == 0)
-            {
-                ButtonNum = 2;
-            }
-        }
-        
-        //Draw Screen 
-        if(DrawScreenOpen == true)
-        {
-            if((scn_pos_x > 10 && scn_pos_x < 100) && (scn_Y > 40 && scn_Y < 90))
-            {
-                ButtonNum = 10;
-            }
-
-        }
-        
-        //Exit Button
-        if((scn_pos_x > 170 && scn_pos_x < 320) && (scn_Y > 250 && scn_Y < 300))
-        {
-            if(ButtonNum > 0)
-            {
-                ExitButton = true;
-            }
-        }
+        scn_pos_y = 320 - scn_pos_y;        
     }
     
     IFS0bits.INT0IF = 0;
@@ -446,14 +409,14 @@ void I2C_nack(void) // Acknowledge Data bit
 }
 
 //Master Interrupt Handler
-void __attribute__((vector(_I2C1_MASTER_VECTOR), interrupt(ipl7srs), nomips16)) I2C_Master_Handler()
+void __attribute__((vector(_I2C1_MASTER_VECTOR), interrupt(ipl4srs), nomips16)) I2C_Master_Handler()
 {
-     
+
     IFS4bits.I2C2MIF = 0;
 }
 
 //Slave Interrupt Handler
-void __attribute__((vector(_I2C2_SLAVE_VECTOR), interrupt(ipl7srs), nomips16)) I2C_Slave_Handler()
+void __attribute__((vector(_I2C2_SLAVE_VECTOR), interrupt(ipl4srs), nomips16)) I2C_Slave_Handler()
 {
     
     IFS0bits.IC2IF = 0;
